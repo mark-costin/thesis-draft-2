@@ -1,0 +1,23 @@
+# Virtual environment (CRITICAL)
+.venv/
+venv/
+ENV/
+
+# Python cache & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Environment variables & secrets
+.env
+*.env
+
+# IDE / VS Code
+.vscode/
+.idea/
+
+# Large model binaries & local uploads (if any)
+backend/storage/uploads/*
+!backend/storage/uploads/.gitkeep
