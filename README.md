@@ -88,7 +88,7 @@ The platform uses a modular multi-tier architecture containerized with Docker Co
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | Reflex (Radix UI components) | Pure-Python, responsive UI for mobile and PC |
+| **Frontend** | Reflex (Radix UI components) | Pure-Python, responsive UI for browser |
 | **Backend** | FastAPI | Business logic and API routing |
 | | SQLAlchemy 2 (ORM) + Alembic | Parameterized queries (SQL injection prevention) and schema migrations |
 | | Pydantic v2 | Input validation and biometric range checks |
