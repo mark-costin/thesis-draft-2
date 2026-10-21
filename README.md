@@ -13,22 +13,22 @@ The system screens four chronic condition groups simultaneously:
 - **CRD:** Chronic Respiratory Diseases (Asthma / COPD)
 - **NEURO:** Selected Mental Health and Neurological Conditions *(define the specific conditions)*
 
-The system combines self-reported biometrics, patient-verified laboratory values, and a structured family health history. These feed calibrated XGBoost models, and SHAP provides local explanations. Each patient receives a transparent risk assessment in plain language, general preventive guidance, and an exportable health report to bring to their own healthcare provider.
+The system combines self-reported biometrics, lifestyle and questionnaire data, patient-verified laboratory values, and a structured family health history. These feed calibrated XGBoost models, and SHAP provides local explanations. Each patient receives a transparent risk assessment in plain language, general preventive guidance, and an exportable health report to bring to their own healthcare provider.
 
-The system has **no doctor or clinic role**. The patient is the sole user and the sole human-in-the-loop, and owns their data on their own self-hosted instance. All outputs are for educational preventive screening and are **not a medical diagnosis**.
+The system has **no doctor or clinic role**. The patient is the sole user and the sole human-in-the-loop, and owns their data on an instance the project team controls (a local machine during development, a DigitalOcean droplet for deployment). All outputs are for educational preventive screening and are **not a medical diagnosis**.
 
 ---
 
 ## System Architecture
 
-The platform uses a modular multi-tier architecture containerized with Docker Compose and deployed through Coolify. It separates the presentation layer, the API and business logic, asynchronous document parsing, machine learning inference, and persistent storage.
+The platform uses a modular multi-tier architecture containerized with Docker Compose and deployed on a DigitalOcean droplet behind an Nginx reverse proxy. It separates the presentation layer, the API and business logic, asynchronous document parsing, machine learning inference, and persistent storage.
 
 ```
                     [ Patient — Phone or PC Browser ]
                                    │
-                                   │  HTTPS via Cloudflare Tunnel
+                                   │  HTTPS (Let's Encrypt certificate)
                                    ▼
-                   [ Coolify Reverse Proxy (Traefik) ]
+              [ Nginx Reverse Proxy — DigitalOcean Droplet ]
                                    │
                                    ▼
                     [ Reflex Web App (UI + State) ]
@@ -40,12 +40,11 @@ The platform uses a modular multi-tier architecture containerized with Docker Co
      ┌─────────────────┬───────────┴───────┬─────────────────────────┐
      ▼                 ▼                   ▼                         ▼
 [ PostgreSQL ]      [ Redis ]       [ ML Engine ]            [ Local Volume ]
-- Patient profile   - RQ task       - 4x XGBoost models     - Encrypted lab
-- Vitals              queue           (CVD, T2D, CRD,          images / PDFs
-- Family history    - Idempotency     NEURO)
-- Lab results         cache         - SHAP TreeExplainer
-- Risk assessments  - Rate limits
-  + SHAP JSONB
+- 17 tables         - RQ task       - 4x XGBoost models     - Encrypted lab
+- Row-Level           queue           (CVD, T2D, CRD,          images / PDFs
+  Security          - Idempotency     NEURO)
+- Append-only         keys          - SHAP TreeExplainer
+  audit log         - Rate limits
                        │
                        ▼
               [ OCR Worker (RQ) ]
@@ -54,15 +53,15 @@ The platform uses a modular multi-tier architecture containerized with Docker Co
                 for patient review
 ```
 
-1. **Presentation Tier (Reflex + Radix UI):** A mobile-first, desktop-compatible patient portal written in pure Python and compiled to React. It handles dynamic forms, vitals charts, document upload, and the side-by-side OCR verification screen. UI state is synchronized with the browser over WebSockets without full-page reloads.
+1. **Presentation Tier (Reflex + Radix UI):** A browser-based, responsive patient portal written in pure Python and compiled to React. It handles dynamic forms, vitals charts, questionnaires, document upload, and the side-by-side OCR verification screen. UI state is synchronized with the browser over WebSockets without full-page reloads.
 2. **Application Tier (FastAPI):** Reflex state handlers call the FastAPI service over internal REST. The service enforces:
-   - JWT authentication and per-patient data isolation
+   - JWT authentication and per-patient data isolation (sets the patient identity for Row-Level Security on every request)
    - Idempotency keys
    - Rate limiting
    - Pydantic validation
 3. **Asynchronous Worker Tier (Redis + RQ + Chandra OCR):** Runs heavy document parsing outside the web server. Uploaded files are queued, parsed in the background, and their status is updated. When a job finishes, Reflex pushes the update to the patient's screen.
-4. **Machine Learning Tier (XGBoost + SHAP):** Four disease-specific models stay loaded in memory and run on the patient's verified inputs. SHAP TreeExplainer produces local feature attributions, shown in plain language (e.g., "Family history of diabetes increased your risk the most").
-5. **Persistent Storage Tier (PostgreSQL + Local Volume):** ACID-compliant relational tables hold structured health data. Uploaded documents are encrypted and stored on an isolated Docker volume to prevent database bloat.
+4. **Machine Learning Tier (XGBoost + SHAP):** Four disease-specific models stay loaded in memory and run on the patient's verified inputs. Each model file is checked against its registered SHA-256 checksum before loading. SHAP TreeExplainer produces local feature attributions, shown in plain language (e.g., "Family history of diabetes increased your risk the most").
+5. **Persistent Storage Tier (PostgreSQL + Local Volume):** ACID-compliant relational tables hold structured health data, with Row-Level Security on every patient table. Uploaded documents are encrypted and stored on an isolated Docker volume to prevent database bloat.
 
 ---
 
@@ -70,13 +69,13 @@ The platform uses a modular multi-tier architecture containerized with Docker Co
 
 | # | Module | Summary |
 | :--- | :--- | :--- |
-| 1 | **Authentication & Security** | Self-registration, consent capture, JWT sessions, per-patient data isolation, rate limiting, idempotency |
-| 2 | **Personal Health Record & Vitals** | Demographics (age, biological sex) and time-series vitals (blood pressure, BMI, heart rate, blood glucose) |
-| 3 | **Family Health History Intake** | Pedigree grid of relatives × target diseases, with early-onset weighting into familial risk bands |
-| 4 | **Document Ingestion & Patient Verification** | Upload of lab documents (≤10 MB), background Chandra OCR, side-by-side review; values are saved only after the patient confirms them |
-| 5 | **Risk Prediction & Explainability** | Four XGBoost models, SHAP explanations, risk tiers, disclaimers, and a "consult a healthcare provider" prompt for high-risk results |
-| 6 | **Health Report Export** | PDF summary of vitals, family history, verified labs, and risk results for the patient's healthcare provider |
-| — | **Data Rights** | Patient can export and permanently delete their account and data (RA 10173) |
+| 1 | **Authentication & Security** | Self-registration with RA 10173 consent, JWT sessions, per-patient isolation (RLS), lockout, rate limiting, idempotency, self-service password reset |
+| 2 | **Personal Health Record & Vitals** | Profile (date of birth, biological sex), time-series vitals (blood pressure, heart rate, weight, height, BMI, glucose, SpO2), lifestyle, and health history |
+| 3 | **Family Health History Intake** | Pedigree grid of relatives × target diseases, with early-onset weighting into a Family History Risk Score (FHRS) |
+| 4 | **Health Questionnaires** | PHQ-9, GAD-7, PSQI, mMRC, CAT, ACT; PHQ-9 item 9 triggers crisis resources (NCMH 1553) |
+| 5 | **Document Ingestion & Patient Verification** | Upload of lab documents (≤10 MB), background Chandra OCR, unit conversion, side-by-side review; values are used only after the patient confirms them |
+| 6 | **Risk Prediction & Explainability** | Four XGBoost models, SHAP explanations, risk tiers, disclaimers, and a "consult a healthcare provider" prompt for high-risk results |
+| 7 | **Preventive Goals & Health Report** | Self-set or suggested goals, PDF health report, data export and permanent account deletion (RA 10173) |
 
 ---
 
@@ -86,9 +85,10 @@ The platform uses a modular multi-tier architecture containerized with Docker Co
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | Reflex (Radix UI components) | Pure-Python, responsive UI for mobile and PC |
+| **Frontend** | Reflex (Radix UI components) | Pure-Python, browser-based responsive UI for mobile and PC |
+| | httpx | Reflex state calls to the FastAPI backend |
 | **Backend** | FastAPI | Business logic and API routing |
-| | SQLAlchemy 2 (ORM) + Alembic | Parameterized queries (SQL injection prevention) and schema migrations |
+| | SQLAlchemy 2 (ORM) | Parameterized queries (SQL injection prevention) |
 | | Pydantic v2 | Input validation and biometric range checks |
 | | nh3 + Reflex default escaping | XSS prevention |
 | | PyJWT | Session tokens and per-patient data isolation |
@@ -102,11 +102,11 @@ The platform uses a modular multi-tier architecture containerized with Docker Co
 | **Machine Learning** | XGBoost | Four disease risk models (CVD, T2D, CRD, NEURO) |
 | | SHAP (TreeExplainer) | Local feature explanations |
 | | Chandra OCR | Lab document text and table extraction |
-| **Database & Storage** | PostgreSQL 16+ | Patient records, vitals, family history, lab results, risk assessments |
+| **Database & Storage** | PostgreSQL 18 (15+ required) | 17 tables with Row-Level Security; schema created by numbered SQL scripts in `database/` |
 | | Docker volume | Encrypted lab images and PDFs |
-| **Deployment** | Docker Compose | Containerized self-hosting |
-| | Coolify | Deployment management, reverse proxy, scheduled database backups |
-| | Cloudflare Tunnel | Secure remote access without port forwarding, HTTPS, DDoS protection |
+| **Deployment** | Docker Compose | Containerized services: web, api, worker, postgres, redis |
+| | Nginx + Let's Encrypt (Certbot) | Reverse proxy, HTTPS, WebSocket upgrade for Reflex |
+| | DigitalOcean droplet | Cloud VPS for the deployed system (synthetic data only) |
 | **Tooling** | uv (Python 3.11) | Package and environment management |
 | | DBeaver | Database administration |
 | | Git / GitHub, pytest | Version control and testing |
@@ -147,16 +147,20 @@ The platform uses a modular multi-tier architecture containerized with Docker Co
 
 ## Security & Data Privacy (RA 10173)
 
-- **Per-patient isolation:** Every query is scoped to the `patient_id` in the signed JWT, so patients cannot access each other's records, even on a household instance.
+The system applies Zero Trust security principles (NIST SP 800-207).
+
+- **Per-patient isolation:** Every request sets the `patient_id` from the signed JWT, and PostgreSQL Row-Level Security returns only that patient's rows, even on a shared instance. With no identity set, queries return nothing.
+- **Least-privilege database access:** The app connects as `med_app`, which cannot bypass RLS, change the schema, read the audit log, or change the model registry. The `postgres` account is used only for setup and maintenance.
 - **Password hashing:** Argon2id via pwdlib.
-- **Encryption:** HTTPS in transit (Cloudflare Tunnel). Uploaded documents are encrypted at rest with Fernet.
+- **Encryption:** HTTPS in transit (Nginx with a Let's Encrypt certificate). Uploaded documents are encrypted at rest with Fernet.
+- **Tamper-evident audit log:** Security events are written through `log_audit()` into a hash-chained, append-only table; `verify_audit_chain()` detects any edit.
 - **Request protection:**
   - Idempotency keys prevent duplicate writes on unstable mobile connections.
   - Rate limiting blocks brute-force login attempts.
   - CORS is restricted to the app's own domain.
-- **Consent and data rights:** Consent is captured at registration. The patient can export or permanently delete their data.
-- **Backups:** Coolify scheduled PostgreSQL backups, plus a backup of the uploads volume.
-- **Third-party note:** Cloudflare Tunnel terminates TLS at Cloudflare's edge. Tailscale is a private-network alternative.
+- **Consent and data rights:** Consent is captured at registration. The patient can export or permanently delete their data; deletion cascades to every patient table.
+- **Backups:** Scheduled `pg_dump` of `med_db` plus a backup of the uploads volume.
+- **Deployment data:** The DigitalOcean droplet holds synthetic data only. Real patient data on a cloud server would need additional RA 10173 safeguards.
 
 ---
 
@@ -166,44 +170,60 @@ The project uses a flat structure: each top-level folder is at most one level de
 
 ```text
 thesis-draft-2/
-├── .gitignore                      # Excludes .venv, caches, uploads, .env, generated datasets
-├── .env.example                    # Template for secrets (JWT key, DB URL, Fernet key, Redis URL)
+├── .gitignore                      # Excludes .venv, caches, uploads, .env, *.dump, generated datasets
+├── .env.example                    # Template: DATABASE_URL (med_app), APP_DB_PASSWORD, JWT key, Fernet key, Redis URL
 ├── README.md
 ├── docker-compose.yml              # Services: web (Reflex), api (FastAPI), worker (RQ), postgres, redis
+├── Dockerfile.web                  # Reflex image
+├── Dockerfile.api                  # FastAPI image (includes ML/ for model loading)
+├── Dockerfile.worker               # RQ + Chandra OCR image
 ├── pyproject.toml / uv.lock        # Pinned Python dependencies (uv)
 │
-├── BACKEND/
+├── database/                       # Numbered SQL scripts, run once on an empty database
+│   ├── 00_roles.sh                 # Creates the least-privilege med_app login
+│   ├── 01_functions.sql … 18_patient_goals.sql   # The 17 tables, in dependency order
+│   ├── 99_security.sql             # Row-Level Security and permissions (runs last)
+│   └── README.md                   # What each script does
+│
+├── backend/
 │   ├── main.py                     # FastAPI app, CORS, rate limiting, idempotency middleware
 │   ├── config.py                   # Settings, secrets, volume paths
-│   ├── database.py                 # DB engine, sessions, current-patient dependency
+│   ├── database.py                 # DB engine (as med_app), sessions, set_request_identity()
 │   ├── security.py                 # JWT, password hashing, file encryption
-│   ├── models.py                   # SQLAlchemy ORM models
+│   ├── models.py                   # SQLAlchemy ORM models for the 17 tables
 │   ├── schemas.py                  # Pydantic request/response schemas
-│   ├── services.py                 # Business logic, storage adapter, PDF report builder
+│   ├── services.py                 # Business logic, FHRS calculation, unit conversion, PDF report builder
 │   ├── ocr_worker.py               # RQ job: Chandra OCR → unconfirmed lab results
-│   ├── routes/                     # auth, profile, vitals, family_history, documents, risk, reports, account
-│   ├── alembic/                    # Database migrations
+│   ├── routes/                     # auth, profile, vitals, lifestyle, health_history, questionnaires,
+│   │                               # family_history, documents, risk, goals, reports, account
+│   ├── tests/                      # pytest: API, auth, and cross-patient isolation tests
 │   └── uploads/                    # Docker volume mount for encrypted documents
 │
-├── FRONTEND/
-│   ├── rxconfig.py                 # Reflex config (incl. cors_allowed_origins)
+├── frontend/
+│   ├── rxconfig.py                 # Reflex config (app_name="patient_app", cors_allowed_origins)
 │   └── patient_app/                # Reflex app package (folder name must match app_name)
 │       ├── patient_app.py          # Entrypoint and routing
-│       ├── state.py                # Reflex state (auth, vitals, family history, documents, risk)
+│       ├── state.py                # Reflex state + API client (JWT, Idempotency-Key)
 │       ├── components.py           # Radix-based UI components (cards, forms, charts, tables)
-│       ├── login.py                # Login / registration with consent
-│       ├── dashboard.py            # Risk summaries and vitals trends
-│       ├── vitals.py               # Vitals log and history
-│       ├── family_history.py       # Pedigree intake grid
-│       ├── documents.py            # Upload and side-by-side verification
-│       ├── risk.py                 # Four-disease risk and SHAP explanations
-│       └── report.py               # PDF export and account data controls
+│       ├── login.py                # Screen 1: registration with consent, login, password reset
+│       ├── dashboard.py            # Screen 2: risk summaries and vitals trends
+│       ├── vitals.py               # Screen 3: vitals, lifestyle, and health history tabs
+│       ├── family_history.py       # Screen 4: pedigree intake grid
+│       ├── questionnaires.py       # Screen 5: PHQ-9, GAD-7, PSQI, mMRC, CAT, ACT + crisis dialog
+│       ├── documents.py            # Screen 6: upload and side-by-side verification
+│       ├── risk.py                 # Screen 7: four-disease risk and SHAP explanations
+│       └── report.py               # Screen 8: goals, PDF report, data export and deletion
+│
+├── deploy/
+│   ├── nginx.conf                  # Reverse proxy, HTTPS, WebSocket upgrade for Reflex
+│   └── backup.sh                   # Scheduled pg_dump + uploads volume backup
 │
 └── ML/
-    ├── model_registry.py           # Loads the 4 XGBoost models and SHAP explainers at startup
-    ├── feature_builder.py          # Builds model inputs (vitals + verified labs + pedigree bands)
+    ├── model_registry.py           # Loads the 4 models, verifies SHA-256, builds SHAP explainers
+    ├── feature_builder.py          # Builds model inputs from vitals, lifestyle, questionnaires,
+    │                               # confirmed labs, and FHRS
     │
-    ├── synthetic/                  # Synthetic data generation scripts only
+    ├── synthetic/                  # Synthetic data generator + seed script for demo patients
     ├── OCR/                        # Chandra OCR experiments and lab-value extraction tests
     │
     ├── ai_model/                   # ML notebooks: training, tuning, and evaluation
@@ -221,7 +241,7 @@ thesis-draft-2/
         └── (evaluation outputs, prefixed by notebook: eval01_*, eval02_*, ..., eval05_*)
 ```
 
-**ML data flow:** `synthetic/` generates the dataset → `ai_model/` trains and evaluates → `artifacts/` stores the models and outputs → `model_registry.py` loads the selected models from `artifacts/` for the live app.
+**ML data flow:** `synthetic/` generates the dataset → `ai_model/` trains and evaluates → `artifacts/` stores the models and outputs → the models are registered in the `model_versions` table → `model_registry.py` loads them from `artifacts/` for the live app.
 
 **Artifact naming:** outputs stay flat in `artifacts/` and are prefixed by the notebook that created them, for example `eval01_roc_cvd.png`, `eval02_calibration_t2d.png`, `eval03_delong.csv`, `eval05_subgroup_auroc.csv`.
 
@@ -229,12 +249,41 @@ thesis-draft-2/
 
 | Entity | Purpose |
 | :--- | :--- |
-| `users` | Credentials, age, biological sex, consent timestamp |
-| `vitals_records` | Time-series self-reported vitals |
-| `family_histories` | Relatives × conditions with onset ages |
-| `ocr_documents` | Encrypted file path and parsing status |
-| `lab_results` | Extracted lab values; used only when `is_confirmed = TRUE` |
-| `risk_assessments` | Probability, risk tier, model version, SHAP values (JSONB) |
+| `users` | Login credentials, lockout, session revocation (no health data) |
+| `patients` | Minimal profile (name, date of birth, biological sex) and RA 10173 consent |
+| `password_reset_tokens` | Hashed, single-use, one-hour reset tokens |
+| `audit_ledger` | Hash-chained, append-only security log |
+| `documents` | Uploaded lab files (encrypted) and OCR status |
+| `vitals_records` | Self-reported vitals; BMI computed automatically |
+| `lab_results` | One lab value per row; used only when `is_confirmed = TRUE` |
+| `lifestyle_records` | Smoking, activity, sleep, diet, occupational exposure |
+| `patient_health_history` | Patient's own past conditions |
+| `questionnaire_responses` | PHQ-9, GAD-7, PSQI, mMRC, CAT, ACT with crisis flag |
+| `patient_family_history` | Relatives × conditions with onset ages |
+| `patient_fhrs_stratification` | Family History Risk Score per disease |
+| `model_versions` | Registered model files, checksums, risk thresholds (read-only for the app) |
+| `risk_assessments` | One screening run with an input snapshot |
+| `risk_results` | Probability and risk tier per disease |
+| `shap_explanations` | Ranked SHAP contributions per result |
+| `patient_goals` | Preventive goals |
+
+---
+
+## Development Status
+
+Development follows the nine-sprint plan in the shared *Development Sprint Plan* doc.
+
+| Sprint | Focus | Status |
+| :--- | :--- | :--- |
+| 0 | Project setup; database schema (17 tables, RLS, `med_app`) | Database done |
+| 1 | Backend core and authentication · synthetic data design | To do |
+| 2 | Health data APIs · baseline models | To do |
+| 3 | Documents, OCR worker, reports · tuning, calibration, SHAP | To do |
+| 4 | Frontend Screens 1–4 · model evaluation | To do |
+| 5 | Frontend Screens 5–8 · risk assessment API | To do |
+| 6 | Integration and debugging | To do |
+| 7 | System testing and evaluation | To do |
+| 8 | Docker, Nginx, DigitalOcean deployment | To do |
 
 ---
 
