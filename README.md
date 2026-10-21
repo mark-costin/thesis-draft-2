@@ -1,5 +1,3 @@
-# Self-Hosted Personal Health Risk Screening System for Preventive Noncommunicable Disease Assessment
-
 ## Title and Purpose of the Study
 
 ### Title
