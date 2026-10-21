@@ -88,7 +88,7 @@ The platform uses a modular multi-tier architecture containerized with Docker Co
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | Reflex (Radix UI components) | Pure-Python, responsive UI for browser |
+| **Frontend** | Reflex (Radix UI components) | Pure-Python, responsive UI for mobile and PC |
 | **Backend** | FastAPI | Business logic and API routing |
 | | SQLAlchemy 2 (ORM) + Alembic | Parameterized queries (SQL injection prevention) and schema migrations |
 | | Pydantic v2 | Input validation and biometric range checks |
@@ -167,36 +167,31 @@ thesis-draft-2/
 ├── pyproject.toml / uv.lock        # Pinned Python dependencies (uv)
 │
 ├── BACKEND/
+│   ├── main.py                     # FastAPI app, CORS, rate limiting, idempotency middleware
+│   ├── config.py                   # Settings, secrets, volume paths
+│   ├── database.py                 # DB engine, sessions, current-patient dependency
+│   ├── security.py                 # JWT, password hashing, file encryption
+│   ├── models.py                   # SQLAlchemy ORM models
+│   ├── schemas.py                  # Pydantic request/response schemas
+│   ├── services.py                 # Business logic, storage adapter, PDF report builder
+│   ├── ocr_worker.py               # RQ job: Chandra OCR → unconfirmed lab results
+│   ├── routes/                     # auth, profile, vitals, family_history, documents, risk, reports, account
 │   ├── alembic/                    # Database migrations
-│   ├── app/
-│   │   ├── main.py                 # FastAPI app, CORS, rate limiting, idempotency middleware
-│   │   ├── config.py               # Settings, secrets, volume paths
-│   │   ├── security.py             # JWT, password hashing, file encryption
-│   │   ├── api/
-│   │   │   ├── routes/             # auth, profile, vitals, family_history, documents, risk, reports, account
-│   │   │   └── dependencies.py     # DB sessions and current-patient context
-│   │   ├── models/                 # SQLAlchemy ORM models
-│   │   ├── schemas/                # Pydantic request/response schemas
-│   │   ├── services/               # Business logic, storage adapter, PDF report builder
-│   │   └── workers/
-│   │       └── ocr_worker.py       # RQ job: Chandra OCR → unconfirmed lab results
-│   └── storage/
-│       └── uploads/                # Docker volume mount for encrypted documents
+│   └── uploads/                    # Docker volume mount for encrypted documents
 │
 ├── FRONTEND/
 │   ├── rxconfig.py                 # Reflex config (incl. cors_allowed_origins)
-│   └── app/
-│       ├── app.py                  # Entrypoint and routing
-│       ├── state/                  # Reflex state (auth, vitals, family history, documents, risk)
-│       ├── components/             # Radix-based UI components (cards, forms, charts, tables)
-│       └── pages/
-│           ├── index.py            # Login / registration with consent
-│           ├── dashboard.py        # Risk summaries and vitals trends
-│           ├── vitals.py           # Vitals log and history
-│           ├── family_history.py   # Pedigree intake grid
-│           ├── documents.py        # Upload and side-by-side verification
-│           ├── risk.py             # Four-disease risk and SHAP explanations
-│           └── report.py           # PDF export and account data controls
+│   └── patient_app/                # Reflex app package (folder name must match app_name)
+│       ├── patient_app.py          # Entrypoint and routing
+│       ├── state.py                # Reflex state (auth, vitals, family history, documents, risk)
+│       ├── components.py           # Radix-based UI components (cards, forms, charts, tables)
+│       ├── login.py                # Login / registration with consent
+│       ├── dashboard.py            # Risk summaries and vitals trends
+│       ├── vitals.py               # Vitals log and history
+│       ├── family_history.py       # Pedigree intake grid
+│       ├── documents.py            # Upload and side-by-side verification
+│       ├── risk.py                 # Four-disease risk and SHAP explanations
+│       └── report.py               # PDF export and account data controls
 │
 └── ML/
     ├── model_registry.py           # Loads the 4 XGBoost models and SHAP explainers at startup
