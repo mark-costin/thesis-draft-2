@@ -122,22 +122,28 @@ The platform uses a modular multi-tier architecture containerized with Docker Co
 | `optuna` | Bayesian (TPE) hyperparameter search, run inside training folds only to avoid leakage |
 | `shap` | Global and local explanations; beeswarm and waterfall plots |
 | `mlflow` | Experiment tracking; exports the selected model as XGBoost `.json` |
-| `scipy.stats` + custom DeLong implementation | DeLong test (family-history model vs. clinical-only baseline) and bootstrap 95% CIs |
-| `pingouin` | Intraclass correlation (ICC) for expert agreement *(if physicians are available)* |
+| `scipy.stats` + custom DeLong implementation (`eval_utils.py`) | DeLong test (family-history model vs. clinical-only baseline) and bootstrap 95% CIs |
+| `pingouin` | Intraclass correlation (ICC) for expert agreement *(only if physicians give continuous 0–100 scores)* |
 | `fairlearn` | Equalized odds difference; subgroup AUROC and calibration by sex and age band |
 | `pandas`, `matplotlib`, `seaborn` | Data preparation and Chapter 4 figures |
 | JupyterLab / Marimo | Experiment notebooks |
 
 ### Evaluation Plan
 
-| Phase | Metrics | Purpose |
-| :--- | :--- | :--- |
-| 1. Discrimination | AUROC, AUPRC, sensitivity, specificity (at chosen thresholds) | How well the model separates at-risk from not-at-risk individuals |
-| 2. Calibration | Brier score, ECE, calibration plots | Whether predicted probabilities match observed outcome rates |
-| 3. Statistical significance | DeLong's test, bootstrap 95% CIs | Whether family history features significantly improve AUROC over the baseline |
-| 4. Expert agreement *(optional)* | Weighted Cohen's κ, ICC | Agreement between model risk tiers and physician assessments |
-| 5. Fairness | Equalized odds, subgroup performance | Comparable performance across sex and age groups |
-| 6. Usability | ISO/IEC 25010 survey / SUS | Patient-facing usability of the web app |
+| Phase | Notebook (`ML/ai_model/`) | Metrics | Purpose |
+| :--- | :--- | :--- | :--- |
+| 1. Discrimination | `eval_01_discrimination.ipynb` | AUROC, AUPRC, sensitivity, specificity (at chosen thresholds) | How well the model separates at-risk from not-at-risk individuals |
+| 2. Calibration | `eval_02_calibration.ipynb` | Brier score, ECE, calibration plots | Whether predicted probabilities match observed outcome rates |
+| 3. Statistical significance | `eval_03_significance.ipynb` | DeLong's test, bootstrap 95% CIs | Whether family history features significantly improve AUROC over the baseline |
+| 4. Expert agreement *(optional)* | `eval_04_expert_agreement.ipynb` | Weighted Cohen's κ, ICC | Agreement between model risk tiers and physician assessments |
+| 5. Fairness | `eval_05_fairness.ipynb` | Equalized odds, subgroup performance | Comparable performance across sex and age groups |
+| 6. Usability | — (survey) | ISO/IEC 25010 survey / SUS | Patient-facing usability of the web app |
+
+**Evaluation notes**
+- `eval_01` runs each model once on the fixed test set and saves `artifacts/eval_test_predictions.csv` (patient id, true label, baseline probability, full-model probability, sex, age band). Notebooks `eval_02`–`eval_05` read this file, so every metric is computed on the same patients. DeLong's test requires this.
+- The baseline (clinical-only, no family-history features) model is trained and saved alongside the full model so `eval_03` can compare the two.
+- `eval_04` requires a set of cases labeled by physicians. Even though the app has no doctor role, this data has to be collected separately.
+- Fairness results on synthetic data partly reflect the data generator, not only the model. This is noted as a limitation in Chapter 5.
 
 ---
 
@@ -158,9 +164,11 @@ The platform uses a modular multi-tier architecture containerized with Docker Co
 
 ## Project Folder Structure
 
+The project uses a flat structure: each top-level folder is at most one level deep, and related files are grouped by filename prefix instead of subfolders.
+
 ```text
 thesis-draft-2/
-├── .gitignore                      # Excludes .venv, caches, uploads, .env, model training data
+├── .gitignore                      # Excludes .venv, caches, uploads, .env, generated datasets
 ├── .env.example                    # Template for secrets (JWT key, DB URL, Fernet key, Redis URL)
 ├── README.md
 ├── docker-compose.yml              # Services: web (Reflex), api (FastAPI), worker (RQ), postgres, redis
@@ -196,10 +204,28 @@ thesis-draft-2/
 └── ML/
     ├── model_registry.py           # Loads the 4 XGBoost models and SHAP explainers at startup
     ├── feature_builder.py          # Builds model inputs (vitals + verified labs + pedigree bands)
-    ├── artifacts/                  # Selected model files (4x .json) + feature schema
-    ├── notebooks/                  # Training, tuning, and evaluation (Jupyter / Marimo)
-    └── evaluation/                 # DeLong, calibration, fairness scripts and figures
+    │
+    ├── synthetic/                  # Synthetic data generation scripts only
+    ├── OCR/                        # Chandra OCR experiments and lab-value extraction tests
+    │
+    ├── ai_model/                   # ML notebooks: training, tuning, and evaluation
+    │   ├── (training / tuning notebooks)
+    │   ├── eval_utils.py           # ECE, DeLong test, bootstrap CI helpers
+    │   ├── eval_01_discrimination.ipynb    # AUROC, AUPRC, threshold; writes eval_test_predictions.csv
+    │   ├── eval_02_calibration.ipynb       # Brier score, ECE, reliability diagram
+    │   ├── eval_03_significance.ipynb      # DeLong test, bootstrap 95% CIs vs. baseline
+    │   ├── eval_04_expert_agreement.ipynb  # Weighted Cohen's κ, ICC (optional)
+    │   └── eval_05_fairness.ipynb          # Equalized odds, subgroup AUROC and calibration
+    │
+    └── artifacts/                  # Everything produced: models, splits, figures, reports
+        ├── (4x selected model .json + baseline models + feature schema)
+        ├── (fixed train/test split or seed)
+        └── (evaluation outputs, prefixed by notebook: eval01_*, eval02_*, ..., eval05_*)
 ```
+
+**ML data flow:** `synthetic/` generates the dataset → `ai_model/` trains and evaluates → `artifacts/` stores the models and outputs → `model_registry.py` loads the selected models from `artifacts/` for the live app.
+
+**Artifact naming:** outputs stay flat in `artifacts/` and are prefixed by the notebook that created them, for example `eval01_roc_cvd.png`, `eval02_calibration_t2d.png`, `eval03_delong.csv`, `eval05_subgroup_auroc.csv`.
 
 ### Core Database Entities
 
